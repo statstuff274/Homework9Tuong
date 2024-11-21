@@ -32,6 +32,9 @@ library(glmnet)
 library(rpart.plot)
 library(baguette)
 library(ranger)
+library(finalfit)
+library(randomForest)
+library(vip)
 library(readr)  
 ```
 
@@ -245,8 +248,6 @@ MLR_CV_fit <- workflow() %>%
   add_model(MLR_spec) %>%
   fit_resamples(cv_folds_10)
 
-# Bind to obtain metrics
-rbind(MLR_CV_fit %>% collect_metrics())
 
 # Assigning the best model
 best_model <- workflow() %>%
@@ -286,7 +287,8 @@ LASSO_wkf
 # Fitting model w/ tune_grid() and grid_regular()
 LASSO_grid <- LASSO_wkf %>%
   tune_grid(resamples = cv_folds_10,
-            grid = grid_regular(penalty(), levels = 250))
+            grid = grid_regular(penalty(), levels = 250),
+            metrics = metric_set(rmse, mae))
 ```
 
 > We're going to check how many fits we have fold... which outputs a tibble of 500 metrics, 250 rmse values and 250 rsq values.
@@ -312,15 +314,19 @@ LASSO_grid |>
   geom_line()
 ```
 
-> Now we'll pull out the best model using select_best() and finalize_workflow
+> Now we'll pull out the best model using select_best() and finalize_workflow.  We obtained our best LASSO model with a penalty of 0.0000000001, or 1e-10, for rmse and mae. Now we're going to finish our training.
 
 ```{r}
+# Obtaining rmse
 LASSO_best <- LASSO_grid %>%
   select_best(metric = "rmse")
 LASSO_best
-```
 
-> We obtained our best LASSO model with a penalty of 0.0000000001, or 1e-10. Now we're going to finish our training.
+# Obtaining mae
+LASSO_mae <- LASSO_grid %>%
+  select_best(metric = "mae")
+LASSO_mae
+```
 
 ```{r}
 LASSO_wkf %>%
@@ -357,7 +363,8 @@ reg_wkf <- workflow() %>%
 
 # Use CV to select our tuning parameters
 reg_tune <- reg_wkf %>%
-  tune_grid(resamples = cv_folds_10)
+  tune_grid(resamples = cv_folds_10,
+            metrics = metric_set(rmse, mae))
 reg_tune %>%
   collect_metrics()
 
@@ -369,7 +376,8 @@ reg_grid <- grid_regular(cost_complexity(),
 # Then we'll use tune_grid with this specified grid
 reg_fits <- reg_wkf %>%
   tune_grid(resamples = cv_folds_10,
-            grid = reg_grid)
+            grid = reg_grid,
+            metrics = metric_set(rmse, mae))
 reg_fits
 ```
 
@@ -392,7 +400,7 @@ reg_fits %>%
   scale_colour_viridis_d(option = "plasma", begin = .9, end = 0)
 ```
 
-> Now we'll sort by the smallest rmse value and select_best to grab the best model's tuning parameter values. We end up with a value of 0.001. Then we'll finalize our model.
+> Now we'll sort by the smallest rmse value and select_best to grab the best model's tuning parameter values. We end up with a value of 0.001 for rmse and mae. Then we'll finalize our model.
 
 ```{r}
 # Arranged by mean
@@ -405,6 +413,10 @@ reg_fits %>%
 reg_best <- reg_fits %>% 
   select_best(metric = "rmse")
 reg_best
+
+reg_mae <- reg_fits %>% 
+  select_best(metric = "mae")
+reg_mae
 
 # Finalizing our model
 reg_final_wkf <- reg_wkf %>%
@@ -448,17 +460,21 @@ bag_wkf <- workflow() %>%
 # Fit our CV folds
 bag_fit <- bag_wkf %>%
   tune_grid(resamples = cv_folds_10,
-            metrics = metric_set(rmse))
+            metrics = metric_set(rmse, mae))
 bag_fit
 ```
 
-> Now we're going to obtain our best tuning parameter, which is 0.00000349. We're complete our workflow from our tuning and then finalize the model to be fit to bike_train.
+> Now we're going to obtain our best tuning parameter, which is 7.83e-10 for rmse and 0.0000215 for mae. We're complete our workflow from our tuning and then finalize the model to be fit to bike_train.
 
 ```{r}
 # Obtain best tuning
 bag_best <-  bag_fit %>% 
   select_best(metric = "rmse")
 bag_best
+
+bag_mae <-  bag_fit %>% 
+  select_best(metric = "mae")
+bag_mae
 
 # Finalizing workflow
 bag_final_wkf <- bag_wkf %>%
@@ -469,15 +485,17 @@ bag_final <- bag_final_wkf %>%
   finalize_workflow(bag_best) %>%
   fit(bike_train)
 ```
---------------------------------------------------------------------
+
+------------------------------------------------------------------------
 
 ### Tuned Random Forest Model
 
-> Now we're going to tune the random forest model!
+> Now we're going to tune the random forest model, defining the model and engine, creating the workflow, and fitting our folds.
 
 ```{r}
+# Defining model and engine
 random_mod <- rand_forest(mtry = tune()) %>%
-  set_engine("ranger") %>%
+  set_engine("ranger", importance = "impurity") %>%
   set_mode("regression")
 
 # Creating workflow
@@ -488,35 +506,189 @@ random_wkf <- workflow()%>%
 # Fitting our folds
 random_fit <- random_wkf %>%
   tune_grid(resamples = cv_folds_10,
-            grid = 7,
-            metrics = metric_set(rmse))
+            grid = 5,
+            metrics = metric_set(rmse, mae))
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
-> Here I'll have compiled the best (lowest rmse) models for each model.
+> Obtaining our best tuning parameter 12 for both MAE and RMSE, finalizing the workflow, and fitting the model to the training data.
 
 ```{r}
-# MLR
+# Obtaining best tuning parameters
+random_best <- random_fit %>%
+  select_best(metric = "rmse")
+random_best
 
-# LASSO best fit
+random_mae <- random_fit %>%
+  select_best(metric = "mae")
+random_mae
+
+# Finalizing workflow
+random_final_wkf <- random_wkf %>%
+  finalize_workflow(random_best)
+
+# Finalizing model and training on bike_train
+random_final <- random_final_wkf %>%
+  finalize_workflow(random_best) %>%
+  fit(bike_train)
+```
+
+------------------------------------------------------------------------
+
+### Model Fitting
+
+> Since we've finished tuning and fitting the models to the training sets, now we can fit it to the entire training data set and see how it predicts on the test set by doing last_fit for each model.
+
+```{r}
+# Fitting recipe_1 model
+best_model <- workflow() %>%
+  add_recipe(recipe_1) %>%
+  add_model(MLR_spec) %>%
+  last_fit(bike_split)
+best_model %>%
+  collect_metrics()
+```
+
+```{r}
+# Fitting LASSO model
 LASSO_wkf %>%
   finalize_workflow(LASSO_best) %>%
   last_fit(bike_split) %>%
   collect_metrics()
-
-# Regression Tree best rmse
-reg_best
 ```
 
-> Notes penalty = tune(); We're going to be using a resampling model - i.e. CV.
+```{r}
+# Fitting Regression Tree model
+reg_wkf %>%
+  finalize_workflow(reg_best) %>%
+  last_fit(bike_split) %>%
+  collect_metrics()
+```
+
+```{r}
+# Fitting Bagged Tree model
+bag_wkf %>%
+  finalize_workflow(bag_best) %>%
+  last_fit(bike_split) %>%
+  collect_metrics()
+```
+
+```{r}
+# Fitting Random Forest model
+random_wkf %>%
+  finalize_workflow(random_best) %>%
+  last_fit(bike_split) %>%
+  collect_metrics()
+```
+
++ Here are the following RMSEs: HW8 model (3980), LASSO (3999), Regression (3096), Bagged (3073), and Random Tree (2655). Random Tree model outperformed all of the models, so this would be the best overall model.
+
+
+> Now we're going compare to see how it predicts on the test set for all models for both rmse and mae.
+
+```{r}
+# Predicting for LASSO
+LASSO_rmse <- LASSO_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  rmse_vec(truth = bike_test$bike_count)
+LASSO_rmse
+
+LASSO_mae_final <- LASSO_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  mae_vec(truth = bike_test$bike_count)
+LASSO_mae_final
+```
+
+```{r}
+# Predicting for Regression Tree
+reg_rmse <- reg_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  rmse_vec(truth = bike_test$bike_count)
+reg_rmse
+
+reg_mae_final <- reg_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  mae_vec(truth = bike_test$bike_count)
+reg_mae_final
+```
+
+```{r}
+# Predicting for Bagged Tree
+bag_rmse <- bag_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  rmse_vec(truth = bike_test$bike_count)
+bag_rmse
+
+bag_mae_final <- bag_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  mae_vec(truth = bike_test$bike_count)
+bag_mae_final
+```
+
+```{r}
+# Predicting for Random Tree
+random_rmse <- random_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  rmse_vec(truth = bike_test$bike_count)
+random_rmse
+
+random_mae_final <- random_final %>%
+  predict(bike_test) %>%
+  pull() %>%
+  mae_vec(truth = bike_test$bike_count)
+random_mae_final
+```
+
++ As previously seen, Random Tree performs the best here as well in both rmse and mae, 2621,59 and 2103.436, respectively.
+
+### Extract final model fits
+
+> Now we're going to extract some model fits and report a summary for some of the models. For LASSO and our MLR, we'll report the final coefficient tables.
+
+```{r}
+# LASSO Coefficient Table
+LASSO_final %>%
+  extract_fit_parsnip() %>%
+  tidy()
+
+# MLR model Coefficient Table
+best_model %>%
+  extract_fit_parsnip() %>%
+  tidy()
+```
+
++ For the regression tree model, we'll give a plot of the final fit
+
+```{r}
+# Final fit plot regression tree model
+reg_final %>%
+  extract_fit_engine() %>%
+  rpart.plot::rpart.plot(roundint = FALSE)
+```
+
++ For the bagged tree and random forest models, we'll produce a variable importance plot
+
+```{r}
+# Bagged tree variable plot
+
+
+# Random forest variable importance plot
+
+```
+
+> Finally, we will fit the overall best model (Random Forest) to fit the entire data set! Now it's been trained on the entire dataset!
+
+```{r}
+# Fitting random forest to the entire data set
+random_best_overall <- random_final_wkf %>%
+  finalize_workflow(random_best) %>%
+  fit(bikes)
+random_best_overall
+```
+
