@@ -1,0 +1,522 @@
+---
+title: "Week 9 - Additional Modeling Practice"
+author: "John Tuong"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## [Additional Modeling Practice]{.underline}
+
+> Some of this code was taken and inspired from the Homework 8 key to ensure the models will work because my code was having issues from before.
+
+> The purpose of this assignment is to create an EDA, exploratory data analysis, document for a data set about Seoul Bikes. We do this in order to better understand our data. The document will go through the following:
+
+-   Checking the data.
+-   Splitting the data.
+-   Fitting MLR models.
+
+> Note: Items are numbered for ease of grading; regardless, the document is still to be read in narrative form.
+
+### [Checking the data]{.underline}
+
+> Staring off, we're going to install and load the necessary packages to create the EDA. Then we'll read in the data.
+
+```{r}
+# Loading in libraries
+library(tidyverse)
+library(tidymodels)  
+library(lubridate)
+library(glmnet)
+library(rpart.plot)
+library(baguette)
+library(ranger)
+library(readr)  
+```
+
+```{r}
+# Read in data
+bikes <- readr::read_csv("https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv", locale = locale(encoding = "latin1"))
+bikes
+```
+
+> 1.  Next we're going to check for missingness within our data set. As seen below, there are no columns missing any values or data, so we can move forward with continuing to check the data.
+
+```{r}
+# Checked for missingness - to see if there are any missing values in the data set.
+missingnesscheck <- is.na(bikes) %>% colSums()
+missingnesscheck
+```
+
+> 2.  Now we'll check the column types and their values to ensure it makes sense. We'll do a basic summary of statistics for numeric columns and then check for the unique values of the categorical variables.
+>     -   Using the str function, when checking for the column types and values, it does indicate that the variables contain the correct column types and values accordingly. There are a total of 14 variables: 10 are numeric types (Rented Bike Count, Hour, Temperature, Humidity, Wind speed, Visibility, Dew point temperature, Solar Radiation, Rainfall, Snowfall) and 4 are character types (Date, Seasons, Holidays, Functioning Day).
+>     -   Using the summary function we selected numeric columns to create summary statistics for, which include the minimum, 1st quartile, median, mean, 3rd quartile, and maximum. These summary statistics give us some insight regarding weather conditions and total bike rentals.
+>     -   Using as.list, we're able to collect each unique value of the categorical variables.
+>         -   Season levels contain the four seasons: Spring, Summer, Fall and Winter.
+>         -   Holiday levels contain: Holiday and No Holiday.
+>         -   Functioning Day levels contain: Yes and No.
+
+```{r}
+# Checked for  each variable's internal structure, denoting the data type of the variables.
+attributes(bikes)
+
+# Created a basic summary of statistics for numeric columns by only selecting numerical variables
+summary(select(bikes, -Date, -Seasons, -Holiday, -'Functioning Day'))
+
+# Obtained a list of unique levels/values for each categorical variable
+as.list(unique(bikes$Seasons))
+as.list(unique(bikes$Holiday))
+as.list(unique(bikes$'Functioning Day'))
+```
+
+> 3.  Next we'll convert the Date column into month/day/year to more easily read and viewed the data set and check for weird values.
+
+```{r}
+# Using lubridate, we're reformmating the date to be m/d/y. First we use as.Date to parse the dates and allow them to be readable in R then we reformat them as m/d/y.
+bikes <- bikes %>%
+  mutate(date = lubridate::dmy(Date)) %>%
+  select(-Date)
+```
+
+```{r}
+# Check character columns
+bikes$Seasons %>%
+  unique()
+
+bikes$Holiday %>%
+  unique()
+
+bikes$`Functioning Day` %>%
+  unique()
+```
+
+> 4.  Now we're going to change the categorical variables to have a class of factor. This'll allow us to use the factors/levels of these variables in statistical modeling for us to better understand how these different levels are affected. Also check character columns!
+
+```{r}
+# Used mutate to change the categorical variable class characters to factors.
+
+bikes <- bikes %>%
+  mutate(seasons = as.factor(Seasons),
+         holiday = as.factor(Holiday),
+         `fn_day` = as.factor(`Functioning Day`)) %>%
+  select(-Seasons, -Holiday, -`Functioning Day`)
+```
+
+> 5.  Last, we're going rename all of the variables to have easy names to reference. This'll make it easier for us to reference in our later queries due to the universal naming convention.
+
+```{r}
+# Used clean_names function from the janitor package to lowercase and insert '_' names for all columns. 
+bikes <- bikes %>%
+  rename(`bike_count` = `Rented Bike Count`,
+         `hour` = "Hour",
+         "temp" = `Temperature(°C)`,
+         "wind_speed" = `Wind speed (m/s)`,
+         "humidity" = `Humidity(%)`,
+         "vis" = `Visibility (10m)`,
+         "dew_point_temp" = `Dew point temperature(°C)`,
+         "solar_radiation" = `Solar Radiation (MJ/m2)`,
+         "rainfall" = "Rainfall(mm)",
+         "snowfall" = `Snowfall (cm)`)
+```
+
+> When creating the first summary statistics for bike rentals, bike functioning day that equaled no contained no information to find a statistic on because no bikes were rented on those days. As a result, we created another summary filtering to only keep where bike functioning day equaled to yes. Removing some obsersvations from fn_day.
+
+```{r}
+bikes <- bikes %>%
+  filter(fn_day == "Yes") %>%
+  select(-fn_day)
+```
+
+> 6.  In order to simplify our previous analysis and initial bikes data set, we're going to summarize across the hours so each day has one observation associated with it along with each weather condition. We'll do this by summing up the total amount of bikes rented per hour per day to return This daily rental summary gives us a much better grasp of daily statistics compared to the initial bike data which filtered the data per each hour of the day for bike rentals, whereas this new summary combines all of those hour values into one day to give us a total amount of bikes rented per day. We continue to filter by a functioning day of yes so it doesn't skew our summary of statistics regarding bike rental data and the rest of the numerical variables. Additionally, when filtering out functioning day 'No', the total data goes from 365 days to 353 days indicating that there were 12 days that no bikes were rented out to people.
+
+```{r}
+bikes <- bikes %>%
+  group_by(date, seasons, holiday) %>%
+  summarise(bike_count = sum(bike_count),
+            temp = mean(temp),
+            humidity = mean(humidity),
+            wind_speed = mean(wind_speed),
+            vis = mean(vis),
+            dew_point_temp = mean(dew_point_temp),
+            solar_radiation = mean(solar_radiation),
+            rainfall = sum(rainfall),
+            snowfall = sum(snowfall)) %>%
+  ungroup()
+```
+
+```{r}
+bikes
+```
+
+> Below I have created the first plot, a scatter plot to look at the relationship between bike count rentals and temperature across seasons. The plot shows a strong positive correlation between these two variables, as one variable increases, the other increases. As temperature increases, bike rentals also increases. There are a cluster of data points where the temperature is below 10 degrees celcius with under 10,000 bike rentals per day; those data points most likely represent days colder days with potential less favorable biking conditions, as seen, denoted by the winter data points. Then there is a cluster of data points from 20 to 25 degrees celcius with more than 30,000 bike rentals a day; that cluster represents and shows that perhaps bike riders enjoy more warm weather, denoted by a mix of the Spring, Autumn, and Summer data points. Additionally, the data points are much more spread from 10 to 30 degrees celcius, perhaps indicating that people enjoy riding in more warm weather. However, there are also days where the temperatures are higher but bike rentals are low... this could be due to other weather conditions like some rainfall, wind speeds, holidays, etc.
+
+```{r}
+# Created a scatterplot to explore
+ggplot(bikes,
+          aes(x = temp, y = bike_count)) +
+          geom_jitter(aes(color = seasons)) +
+          ggtitle(label = "The Relationship between Bike Count Rental \n and Temperature (C) across Seasons with Holiday Facet",
+                  subtitle = "Scatter Plot") +
+          theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+                plot.subtitle = element_text(hjust = 0.5)) +
+          labs(x = "Temperature \n (in Celcius)", 
+               y = "Bike Rentals \n (bikes rented per day)") +
+          scale_fill_discrete("Temperature") +
+          facet_grid(~holiday)
+```
+
+> For biking novices like myself, weather conditions that affect biking such as rainfall, snowfall, etc. are apparent, which is I'm interested in how visibility may affect bike rentals. Below I have created a plot between visibility and bike rentals across seasons and faceted by holidays. Upon observation there is a slight positive correlation on non-holidays with more rentals based on more visibility. For the holiday facet, there is not much of a pattern with rentals being spread across the entire range of visibility perhaps showcasing that visibility doesn't affect bike rental rate as much on holidays. When looking at both holiday and non-holiday data, Summer and Autumn months produce a higher number of bike rentals compared to Winter and Spring months. Summer months show the highest number of rentals on non-holidays from 500m to 2,000m indicating that summer weather encourages biking regardless of the visibility. In conclusion, the higher the visibility, the more bike rentals there are as the plots showcase a strong positive relationship between the two variables.
+
+```{r}
+ggplot(bikes,
+          aes(x = vis, y = bike_count, color = seasons)) + 
+          geom_jitter(width = 0.2, alpha = 0.6) +
+          facet_wrap(~ holiday) +
+          ggtitle(label = "The Relationship between Bike Count Rental \n and Visibility (by 10m) across Seasons with Holiday facet",
+                  subtitle = "Scatter Plot") +
+          theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+                plot.subtitle = element_text(hjust = 0.5)) +
+          labs(x = "Visibility \n (by 10m)", 
+               y = "Bike Rentals \n (bikes rented per day)")
+```
+
+> Next is the reported correlation matrix for all of the numeric variables; since there are so many, I will pick and choose a handful of correlations (relationship between variables) related to bike_count to explore. Looking at bike_count and its correlations in the first column, we can see that there are some strong positive correlations (as one variable increases, the other also increases), mainly bike_count and temperature with a correlation of 0.753 and bike_count and solar_radiation with a correlation of 0.736. From the first observation, we can see that higher temperatures are associated with a higher number of bike rentals; bike riders enjoy good weather and warmer temperatures when riding bikes. This supported our first scatterplot as we a strong positive correlation from the plot. The second correlation shows that higher solar radiation, i.e. more sun, also correlates with more bike rentals. Additionally, there are many weak negative correlations (as one variable increases, the other one one decreases) with bike_count such as: wind_speed_mean (-0.193), rainfall_mm_mean (-0.237), and snowfall_mm_mean (-0.265). Bike rental counts are expected to be negatively associated with these weather variables because high wind speeds, rainfall, and snowfall affect biking conditions and enviroments, and as a result tend to reduce bike rental rates.
+
+```{r}
+# Created a filtered data frame to only show numeric variables to create correlation matrix
+bikes %>%
+  select(where(is.numeric)) %>%
+  cor()
+```
+
+### Split the data
+
+> For this next section, we'll be splitting the data: 75% of the data into the training set and 25% of it into the test set. We'll also stratify the data by seasons. Additionally, on the training set we'll create a 10 fold CV split, which randomly splits the data into V groups of roughly equal size ("folds").
+
+```{r}
+# Split the data and created the 10 cv fold
+set.seed(11)
+bike_split <- initial_split(bikes, prop = 0.75, strata = seasons)
+bike_train <- training(bike_split)
+bike_test <- testing(bike_split)
+cv_folds_10 <- vfold_cv(bike_train, v = 10)
+```
+
+### Fitting MLR Models
+
+> Now we're going to work on creating the recipes!
+
+-   First recipe!
+
+> Here we're going to fix up the date variable a bit, standardize the numeric variables, and create dummy variables for the seasons, holiday, and our new day type!
+
+```{r}
+# Creating the first recipe
+recipe_1 <- recipe(bike_count ~ ., data = bike_train) %>%
+    step_date(date, features = "dow") %>%
+    step_mutate(day_type = factor(if_else(date_dow %in% c("Sat", "Sun"), "Weekend", "Weekday"))) %>%
+    step_rm(date, date_dow) %>% 
+    step_dummy(seasons, holiday, day_type) %>%
+    step_normalize(all_numeric(), -bike_count)
+```
+
+```{r}
+# Checking recipe
+prep_recipe1 <- recipe_1 %>% 
+  prep(training = bike_train)
+
+baked_data1 <- bake(prep_recipe1, new_data = NULL)
+
+head(baked_data1)
+```
+
+> Now we set up our linear model to use the lm engine and fit the models accordingly. As the final steps we'll use our best model to fit the model on the entire training data set, compute the RMSE, and obtain the final model coefficient table.
+
+```{r}
+# Specifying linear model
+MLR_spec <- linear_reg() %>%
+  set_engine("lm")
+
+
+# Creating work flows and only using recipe 1, fitting model using 10 folds CV
+MLR_CV_fit <- workflow() %>%
+  add_recipe(recipe_1) %>%
+  add_model(MLR_spec) %>%
+  fit_resamples(cv_folds_10)
+
+# Bind to obtain metrics
+rbind(MLR_CV_fit %>% collect_metrics())
+
+# Assigning the best model
+best_model <- workflow() %>%
+  add_recipe(recipe_1) %>%
+  add_model(MLR_spec) %>%
+  last_fit(bike_split)
+best_model %>%
+  collect_metrics()
+
+# Obtain final model
+best_model %>%
+  extract_fit_parsnip() %>%
+  tidy()
+```
+
+------------------------------------------------------------------------
+
+### Additional Modeling
+
+> Now we're going to start HW 9, fitting MLR models, adding a tuned: LASSO model, Regression Tree model, Bagged Tree model, and Random Forest Model.
+
+#### Tuned LASSO Model
+
+> Now for the tuned LASSO model.
+
+```{r}
+# Creating model instance using tune
+LASSO_spec <- linear_reg(penalty = tune(), mixture = 1) |>
+  set_engine("glmnet")
+
+# Create the workflow
+LASSO_wkf <- workflow() %>%
+  add_recipe(recipe_1) %>%
+  add_model(LASSO_spec)
+LASSO_wkf
+
+# Fitting model w/ tune_grid() and grid_regular()
+LASSO_grid <- LASSO_wkf %>%
+  tune_grid(resamples = cv_folds_10,
+            grid = grid_regular(penalty(), levels = 250))
+```
+
+> We're going to check how many fits we have fold... which outputs a tibble of 500 metrics, 250 rmse values and 250 rsq values.
+
+```{r}
+# Check to see fit per fold
+LASSO_grid[1, ".metrics"][[1]] 
+```
+
+```{r}
+LASSO_grid |>
+  collect_metrics() |>
+  filter(.metric == "rmse")
+```
+
+> Now we're going plot the values since we can't really see them.
+
+```{r}
+LASSO_grid |>
+  collect_metrics() |>
+  filter(.metric == "rmse") |>
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_line()
+```
+
+> Now we'll pull out the best model using select_best() and finalize_workflow
+
+```{r}
+LASSO_best <- LASSO_grid %>%
+  select_best(metric = "rmse")
+LASSO_best
+```
+
+> We obtained our best LASSO model with a penalty of 0.0000000001, or 1e-10. Now we're going to finish our training.
+
+```{r}
+LASSO_wkf %>%
+  finalize_workflow(LASSO_best)
+```
+
+> Then we'll fit it to the entire training set to see the model fit.
+
+```{r}
+LASSO_final <- LASSO_wkf %>%
+  finalize_workflow(LASSO_best) %>%
+  fit(bike_train)
+tidy(LASSO_final)
+```
+
+------------------------------------------------------------------------
+
+### Tuned Regression Tree Model
+
+> Now for the Regression Tree Model! First we'll define our model and engine, create our workflow, and use CV to select our tuning parameters.
+
+```{r}
+# Defining our model and engine
+reg_mod <- decision_tree(tree_depth = tune(),
+                                min_n = 20,
+                                cost_complexity = tune()) %>%
+  set_engine("rpart") %>%
+  set_mode("regression")
+
+# Creating our workflow
+reg_wkf <- workflow() %>%
+  add_recipe(recipe_1) %>%
+  add_model(reg_mod)
+
+# Use CV to select our tuning parameters
+reg_tune <- reg_wkf %>%
+  tune_grid(resamples = cv_folds_10)
+reg_tune %>%
+  collect_metrics()
+
+# Now we'll use grid_regular to set the number of values
+reg_grid <- grid_regular(cost_complexity(),
+                         tree_depth(),
+                         levels = c(10, 5))
+
+# Then we'll use tune_grid with this specified grid
+reg_fits <- reg_wkf %>%
+  tune_grid(resamples = cv_folds_10,
+            grid = reg_grid)
+reg_fits
+```
+
+> Since reg_fits isn't useful, we'll use collect_metrics to combine the metrics across the folds. Then we'll plot it to gain some insight.
+
+```{r}
+# Collecting the metrics
+reg_fits %>%
+  collect_metrics()
+
+# Plotting to gain insight
+reg_fits %>%
+  collect_metrics() %>%
+  mutate(tree_depth = factor(tree_depth)) %>%
+  ggplot(aes(cost_complexity, mean, color = tree_depth)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) +
+  scale_x_log10(labels = scales::label_number()) +
+  scale_colour_viridis_d(option = "plasma", begin = .9, end = 0)
+```
+
+> Now we'll sort by the smallest rmse value and select_best to grab the best model's tuning parameter values. We end up with a value of 0.001. Then we'll finalize our model.
+
+```{r}
+# Arranged by mean
+reg_fits %>%
+  collect_metrics() %>%
+  filter(.metric == "rmse") %>%
+  arrange(mean)
+
+# Selecting best tuning parameters
+reg_best <- reg_fits %>% 
+  select_best(metric = "rmse")
+reg_best
+
+# Finalizing our model
+reg_final_wkf <- reg_wkf %>%
+  finalize_workflow(reg_best)
+```
+
+> Now we'll fit the final model via fit because we need to fit on the bike train data, as stated in the assignment.
+
+```{r}
+# Finalized fit
+reg_final <- reg_final_wkf %>%
+  finalize_workflow(reg_best) %>%
+  fit(bike_train)
+```
+
+> We'll plot it to get a better picture!
+
+```{r}
+# Plotting to observe
+reg_final %>%
+  extract_fit_engine() %>%
+  rpart.plot::rpart.plot(roundint = FALSE)
+```
+
+### Tuned Bagged Tree Model
+
+> Now we're going to do the bagged tree model. We'll define our model type and engine, create our workflow, and CV folds.
+
+```{r}
+# Setting up model type and engine
+bag_mod <- bag_tree(tree_depth = 5,
+                    min_n = 10, cost_complexity = tune()) %>%
+  set_engine("rpart") %>%
+  set_mode("regression")
+
+# Create our workflow
+bag_wkf <- workflow() %>%
+  add_recipe(recipe_1) %>%
+  add_model(bag_mod)
+
+# Fit our CV folds
+bag_fit <- bag_wkf %>%
+  tune_grid(resamples = cv_folds_10,
+            metrics = metric_set(rmse))
+bag_fit
+```
+
+> Now we're going to obtain our best tuning parameter, which is 0.00000349. We're complete our workflow from our tuning and then finalize the model to be fit to bike_train.
+
+```{r}
+# Obtain best tuning
+bag_best <-  bag_fit %>% 
+  select_best(metric = "rmse")
+bag_best
+
+# Finalizing workflow
+bag_final_wkf <- bag_wkf %>%
+  finalize_workflow(bag_best)
+
+# Finalizing model and training on bike_train
+bag_final <- bag_final_wkf %>%
+  finalize_workflow(bag_best) %>%
+  fit(bike_train)
+```
+--------------------------------------------------------------------
+
+### Tuned Random Forest Model
+
+> Now we're going to tune the random forest model!
+
+```{r}
+random_mod <- rand_forest(mtry = tune()) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+# Creating workflow
+random_wkf <- workflow()%>%
+  add_recipe(recipe_1) %>%
+  add_model(random_mod)
+
+# Fitting our folds
+random_fit <- random_wkf %>%
+  tune_grid(resamples = cv_folds_10,
+            grid = 7,
+            metrics = metric_set(rmse))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+> Here I'll have compiled the best (lowest rmse) models for each model.
+
+```{r}
+# MLR
+
+# LASSO best fit
+LASSO_wkf %>%
+  finalize_workflow(LASSO_best) %>%
+  last_fit(bike_split) %>%
+  collect_metrics()
+
+# Regression Tree best rmse
+reg_best
+```
+
+> Notes penalty = tune(); We're going to be using a resampling model - i.e. CV.
